@@ -1,0 +1,31 @@
+version: '3'
+
+services:
+  inference:
+    build: ./inference-model
+    container_name: inference
+    volumes:
+      - ./data:/workspace/app/data
+    ports:
+      - "9999:9999"
+    restart: unless-stopped
+    networks:
+      - network
+
+  send-frames:
+    build: ./send-frames
+    container_name: send-frames
+    restart: unless-stopped
+    depends_on:
+      - inference
+    volumes:
+      - C:/teste_inspetor:/app/teste_inspetor  # Mount the host directory to the container
+    environment:
+      - URL_9999=http://inference:9999  # Use the service name for internal Docker networking
+      - MODEL_PATH=./model/cinta.zip
+    networks:
+      - network
+
+networks:
+  network:
+    driver: bridge  # A bridge network for internal communication
