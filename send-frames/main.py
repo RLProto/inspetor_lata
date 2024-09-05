@@ -16,6 +16,7 @@ from watchdog.observers.polling import PollingObserver as Observer
 # Setup InfluxDB connection with a timeout
 influx_client = InfluxDBClient(
     host='10.15.160.2', 
+    #host = '192.168.0.16',
     port=8086, 
     database='L511', 
     timeout=2  # Set a 5-second timeout for the connection
@@ -25,9 +26,9 @@ influx_client = InfluxDBClient(
 INFERENCE_ENDPOINT = "/inference"
 UPLOAD_MODEL_ENDPOINT = "/upload-model"
 URL_9999 = os.getenv('URL_9999', 'http://localhost:9999')
-WATCH_FOLDER = r"./teste_inspetor"
+WATCH_FOLDER = r"./imagens"
 INFER_RATE_LIMIT = 2  # in seconds
-MODEL_PATH = os.getenv('MODEL_PATH',"./model/cinta.zip")
+MODEL_PATH = os.getenv('MODEL_PATH',"./model/modelo.zip")
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -59,8 +60,8 @@ async def upload_model(session, url, file_path):
             logging.error(f"Error during model upload to {url}: {str(e)}")
 
 async def send_request(session, img_path):
-    retries = 5  # Increase the number of retries
-    initial_delay = 1  # Add a small delay before the first attempt
+    retries = 5
+    initial_delay = 1
     await asyncio.sleep(initial_delay)
     
     while retries > 0:
@@ -81,7 +82,7 @@ async def send_request(session, img_path):
             logging.info(f"File {img_path} not ready, retrying...")
         
         retries -= 1
-        await asyncio.sleep(1)  # Increase the sleep time or make it dynamic based on retries
+        await asyncio.sleep(1)
     logging.error(f"File {img_path} not ready after several retries, giving up.")
     return None
 
@@ -96,9 +97,6 @@ def is_file_ready(filename):
     
 async def process_images(q):
     async with aiohttp.ClientSession() as session:
-        processed_folder_path = os.path.join(WATCH_FOLDER, "processed")
-        os.makedirs(processed_folder_path, exist_ok=True)  # Ensure the processed folder exists
-
         while True:
             img_path = q.get()
             if img_path:
@@ -107,15 +105,34 @@ async def process_images(q):
                 if response:
                     logging.info(f"Response: {response}")
 
+                    accuracy = float(response.get('accuracy', 0.0))
+                    label = response.get('prediction', 'unknown')
+
+                    if accuracy < 0.55:
+                        # Handle low confidence predictions
+                        label = "baixa_confiabilidade"
+                        label_path = os.path.join(WATCH_FOLDER, "processed","baixa_confiabilidade")
+                        prediction_int = 5
+                    else:
+                        # Normal processing for higher confidence predictions
+                        label_path = os.path.join(WATCH_FOLDER, "processed", label)
+                        prediction_int = {
+                            'lata_amassada': 1,
+                            'corpo_estranho': 2,
+                            'lata_virada': 3,
+                            'erro': 4
+                        }.get(label, 0)
+
+                    os.makedirs(label_path, exist_ok=True)  # Ensure the label folder exists
+
                     data_points = [{
                         "measurement": "inspetor_lata_amassada",
-                        "tags": {
-                            # Other tags can still be added here if needed
-                        },
+                        "tags": {},
                         "fields": {
-                            "image_name": response.get('image_name', 'unknown'),  # Now a field
-                            "prediction": response.get('prediction', 'unknown'),
-                            "accuracy": float(response.get('accuracy', 0.0))
+                            "image_name": response.get('image_name', 'unknown'),
+                            "prediction": label,
+                            "prediction_int": prediction_int,
+                            "accuracy": accuracy
                         }
                     }]
 
@@ -125,19 +142,19 @@ async def process_images(q):
                         logging.info("Data written to InfluxDB successfully")
                     except requests.exceptions.Timeout as e:
                         logging.error(f"InfluxDB write timed out: {e}")
-                        # Continue processing without interrupting
                     except Exception as e:
                         logging.error(f"Failed to write data to InfluxDB: {e}")
 
                     # Move processed file
                     try:
-                        new_path = os.path.join(processed_folder_path, os.path.basename(img_path))
+                        new_path = os.path.join(label_path, os.path.basename(img_path))
                         shutil.move(img_path, new_path)
                         logging.info(f"Moved {img_path} to {new_path}")
                     except Exception as e:
                         logging.error(f"Failed to move {img_path} to {new_path}: {e}")
 
                 await asyncio.sleep(INFER_RATE_LIMIT)  # Limit the rate of processing
+
 async def main():
     q = queue.Queue()
     event_handler = ImageHandler(q)
@@ -146,7 +163,6 @@ async def main():
     observer.start()
 
     async with aiohttp.ClientSession() as session:
-        # Run model upload once at the start
         await upload_model(session, URL_9999 + UPLOAD_MODEL_ENDPOINT, MODEL_PATH)
 
         try:

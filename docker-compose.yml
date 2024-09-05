@@ -19,10 +19,10 @@ services:
     depends_on:
       - inference
     volumes:
-      - C:/teste_inspetor:/app/teste_inspetor  # Mount the host directory to the container
+      - C:/teste_inspetor:/app/imagens  # Mount the host directory to the container
     environment:
       - URL_9999=http://inference:9999  # Use the service name for internal Docker networking
-      - MODEL_PATH=./model/cinta.zip
+      - MODEL_PATH=./model/modelo.zip
     networks:
       - network
 
